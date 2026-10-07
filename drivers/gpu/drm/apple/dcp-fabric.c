@@ -16,6 +16,7 @@
 #include <linux/workqueue.h>
 
 #include <drm/drm_file.h>
+#include <drm/drm_probe_helper.h>
 
 #include "afk.h"
 #include "dcp.h"
@@ -1149,13 +1150,17 @@ dcp_typec_rebalance_locked(struct apple_dcp_typec_port *arriving, unsigned int d
 	dcp_fabric_run_rebalance(&dcp_rebalance_ops, &ctx);
 	return ctx.planned;
 }
+
+static bool dcp_typec_hdmi_reclaim(struct apple_dcp *dcp);
+
 /*
  * A display is plugged into the HDMI port while its pipeline, the hybrid,
  * drives a Type-C port.  Without dual-stream docks nothing moves for it: a
  * compositor keeps its connector-to-CRTC pairing and could miss a moved
  * display's brief unplug, and a Thunderbolt tunnel never moves.  The HDMI
  * display waits and is handed the hybrid when the Type-C display lets it go
- * (see dcp_typec_route_deactivate()).
+ * (see dcp_typec_route_deactivate()), unless the Type-C display can be
+ * moved out of its way (see dcp_typec_hdmi_reclaim()).
  */
 static void dcp_typec_hdmi_waits(struct apple_dcp *dcp)
 {
@@ -1163,6 +1168,8 @@ static void dcp_typec_hdmi_waits(struct apple_dcp *dcp)
 
 	lockdep_assert_held(&dcp_typec_fabric_lock);
 
+	if (owner && dcp_typec_hdmi_reclaim(dcp))
+		return;
 	if (owner)
 		dev_info(dcp->dev, "HDMI display waits: its pipeline drives the %s on %pOF\n",
 			 owner->tunnel ? "Thunderbolt display" : "display",
@@ -2981,6 +2988,85 @@ static void dcp_hdmi_connect_fixed(void *ctx)
 	else
 		ret = dcp_dptx_connect(dcp, 0);
 	dcp_hdmi_connect_failed(dcp, ret);
+}
+
+/*
+ * An HDMI display has arrived, and stayed, while its hybrid drives a
+ * Type-C display that another free pipeline can drive too.  Where routes
+ * follow their CRTC, hand the hybrid back: the Type-C display goes, the
+ * HDMI display connects, and the Type-C display returns on the other
+ * pipeline.  The compositor sees an unplug and a replug, drops the CRTC it
+ * gave the Type-C display, and finds the HDMI display there before the
+ * Type-C display is back to be paired with the other CRTC.  In the other
+ * order it would pair the returning display with the hybrid's CRTC again.
+ * Without such a pipeline, or on dual-stream machines, the HDMI display
+ * waits as before.
+ */
+#define DCP_RECLAIM_HDMI_MS	3000
+
+static bool dcp_typec_hdmi_reclaim(struct apple_dcp *dcp)
+{
+	struct apple_dcp_typec_route *owner = dcp->active_typec_route;
+	struct dcp_typec_follow_slot slot = {};
+	struct apple_dcp_typec_route *route, *target = NULL;
+	struct apple_connector *connector, *hdmi;
+	struct apple_dcp_typec_port *port;
+	unsigned long timeout;
+	int ret;
+
+	lockdep_assert_held(&dcp_typec_fabric_lock);
+	if (!owner || dcp_typec_dual_stream())
+		return false;
+	port = owner->port;
+	if (port->owner != owner || !dcp_typec_port_follows(port))
+		return false;
+	list_for_each_entry(route, &port->routes, port_link) {
+		if (route == owner || !route->dcp->crtc ||
+		    !dcp_typec_route_available(route) ||
+		    (owner->tunnel && !dcp_typec_tunnel_ctl(route, owner->tunnel_dpin)))
+			continue;
+		target = route;
+		break;
+	}
+	if (!target)
+		return false;
+
+	/* not a blink */
+	msleep(500);
+	if (gpiod_get_value_cansleep(dcp->hdmi_hpd) <= 0)
+		return false;
+
+	connector = dcp->typec_connector;
+	dev_info(dcp->dev, "HDMI display takes its pipeline back, %s on %pOF moves to %s\n",
+		 connector ? connector->base.name : "the display",
+		 port->connector_np, dev_name(target->dcp->dev));
+	dcp_typec_follow_detach(owner, &slot);
+	/* the firmware describes the display anew on the other pipeline */
+	kfree(slot.modes);
+	slot.modes = NULL;
+	slot.nr_modes = 0;
+	if (connector) {
+		WRITE_ONCE(connector->connected, false);
+		apple_connector_set_pipeline(connector, NULL);
+		drm_kms_helper_connector_hotplug_event(&connector->base);
+		schedule_work(&connector->bl_sync_wq);
+	}
+
+	dcp_hdmi_connect_fixed(dcp);
+	hdmi = dcp->fixed_connector;
+	timeout = jiffies + msecs_to_jiffies(DCP_RECLAIM_HDMI_MS);
+	while (hdmi && !READ_ONCE(hdmi->connected) && time_before(jiffies, timeout))
+		msleep(20);
+
+	ret = dcp_typec_follow_attach(target, &slot);
+	if (ret) {
+		dcp_typec_follow_lost(target->dcp, &slot, ret);
+		return true;
+	}
+	/* no CRTC power-on connects it: connect it now, as a new display */
+	WRITE_ONCE(target->dcp->typec_crtc_off, false);
+	dcp_dptx_connect_oob(to_platform_device(target->dcp->dev), 0);
+	return true;
 }
 
 /*
