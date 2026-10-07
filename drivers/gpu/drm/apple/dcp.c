@@ -1205,6 +1205,12 @@ void dcp_dptx_park(struct apple_dcp *dcp)
 			dev_warn(dcp->dev, "failed to deassert Type-C DPTX HPD: %d\n", ret);
 		dcp_dptx_disconnect(dcp, 0);
 	}
+	/* and the second tile's, as dcp_poweroff() does */
+	if (READ_ONCE(dcp->split.active) && dcp->dptxport[1].enabled &&
+	    dcp->dptxport[1].connected) {
+		dptxport_set_hpd(dcp->dptxport[1].service, false);
+		dcp_dptx_disconnect(dcp, 1);
+	}
 }
 
 int dcp_dptx_disconnect_drained(struct apple_dcp *dcp, u32 port)
