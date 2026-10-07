@@ -321,6 +321,45 @@ dcp_fabric_tunnel_candidate(const struct dcp_fabric_port *port,
 }
 EXPORT_SYMBOL_GPL(dcp_fabric_tunnel_candidate);
 
+/*
+ * A modeset gives a Type-C stream routed through @from the CRTC of the
+ * pipeline its port reaches through @to (NULL: none).  Stay, move the
+ * route there, swap it with @holder, the route of another port holding
+ * that pipeline, or refuse the modeset.  A move needs a pipeline that is
+ * free but for its CRTC: no live fixed output and its services up.  An
+ * HDMI port that only had a recent edge does not hold it back: the
+ * compositor has paired the display already, and refusing leaves it
+ * dark.  A swap needs a holder whose own display is off, or about to be
+ * shown on @from's pipeline, and that can reach @from's pipeline through
+ * @holder_back.
+ */
+enum dcp_fabric_follow
+dcp_fabric_follow(const struct dcp_fabric_route *from,
+		  const struct dcp_fabric_route *to,
+		  const struct dcp_fabric_route *holder,
+		  const struct dcp_fabric_route *holder_back, bool holder_off,
+		  const struct dcp_fabric_policy *policy)
+{
+	const struct dcp_fabric_pipeline *pipeline;
+
+	if (!from || !to)
+		return DCP_FABRIC_FOLLOW_REFUSE;
+	if (from == to)
+		return DCP_FABRIC_FOLLOW_STAY;
+	pipeline = to->pipeline;
+	if (!pipeline->bound || pipeline->fixed_busy || pipeline->terminal ||
+	    !pipeline->services_ready)
+		return DCP_FABRIC_FOLLOW_REFUSE;
+	if (!holder)
+		return pipeline->owned ? DCP_FABRIC_FOLLOW_REFUSE :
+					 DCP_FABRIC_FOLLOW_MOVE;
+	if (holder == from || holder->pipeline != pipeline || !holder_off ||
+	    !holder_back || holder_back->pipeline != from->pipeline)
+		return DCP_FABRIC_FOLLOW_REFUSE;
+	return DCP_FABRIC_FOLLOW_SWAP;
+}
+EXPORT_SYMBOL_GPL(dcp_fabric_follow);
+
 unsigned int dcp_fabric_deactivate_steps(int error, bool selected, bool fixed_live,
 					 enum dcp_fabric_deactivate_step steps[3])
 {

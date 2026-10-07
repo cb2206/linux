@@ -608,6 +608,82 @@ static void fabric_unbound_and_mask_test(struct kunit *test)
 			(u32)(BIT(1) | BIT(2)));
 }
 
+static void fabric_follow_test(struct kunit *test)
+{
+	struct fabric_fixture f;
+	struct dcp_fabric_route *lg, *hybrid;
+
+	/* #39 on the M1 Pro: a tunnel on dcpext1, the compositor pairs dcpext0. */
+	fabric_init(&f, false);
+	lg = &f.route[0][1];
+	hybrid = &f.route[0][0];
+	f.pipeline[1].owned = true;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_MOVE);
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, lg, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_STAY);
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(NULL, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, NULL, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+
+	/* A live HDMI display keeps the hybrid, a recent HDMI edge does not. */
+	f.pipeline[0].fixed_busy = true;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	f.pipeline[0].fixed_busy = false;
+	f.pipeline[0].presence = DCP_FABRIC_SETTLING;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_MOVE);
+	f.pipeline[0].presence = DCP_FABRIC_ABSENT;
+
+	/* Owned with no route to swap with (a retiring tunnel), unbound, not up. */
+	f.pipeline[0].owned = true;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	f.pipeline[0].owned = false;
+	f.pipeline[0].bound = false;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	f.pipeline[0].bound = true;
+	f.pipeline[0].services_ready = false;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(lg, hybrid, NULL, NULL, false,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	f.pipeline[0].services_ready = true;
+
+	/* #39 on the M2 Max: DPMS on pairs two direct ports the other way round. */
+	fabric_init(&f, true);
+	f.pipeline[0].owned = true;
+	f.pipeline[1].owned = true;
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(&f.route[0][1], &f.route[0][0],
+						&f.route[1][0], &f.route[1][1],
+						true, &f.policy),
+			DCP_FABRIC_FOLLOW_SWAP);
+	/* the holder's display is still lit elsewhere */
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(&f.route[0][1], &f.route[0][0],
+						&f.route[1][0], &f.route[1][1],
+						false, &f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	/* the holder cannot reach the pipeline it would be given */
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(&f.route[0][1], &f.route[0][0],
+						&f.route[1][0], NULL, true,
+						&f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+	KUNIT_EXPECT_EQ(test, dcp_fabric_follow(&f.route[0][1], &f.route[0][0],
+						&f.route[1][0], &f.route[1][0],
+						true, &f.policy),
+			DCP_FABRIC_FOLLOW_REFUSE);
+}
+
 static void fabric_presence_wrap_test(struct kunit *test)
 {
 	struct dcp_fabric_presence presence = {};
@@ -1667,6 +1743,7 @@ static struct kunit_case fabric_tests[] = {
 	KUNIT_CASE(fabric_effect_failure_core_test),
 	KUNIT_CASE(fabric_deactivate_failure_test),
 	KUNIT_CASE(fabric_unbound_and_mask_test),
+	KUNIT_CASE(fabric_follow_test),
 	KUNIT_CASE(fabric_presence_wrap_test),
 	KUNIT_CASE(fabric_masked_edge_test),
 	KUNIT_CASE_PARAM(fabric_wiring_test, fabric_wiring_gen_params),

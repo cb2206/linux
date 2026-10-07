@@ -468,6 +468,42 @@ bool dcp_modes_end_typec(struct apple_dcp *dcp, struct apple_dcp_typec_route *ro
 	return true;
 }
 
+/* A copy of the modes @dcp knows for @connector's display, or NULL. */
+struct dcp_display_mode *dcp_modes_dup(struct apple_dcp *dcp,
+				       struct apple_connector *connector,
+				       unsigned int *count)
+{
+	struct dcp_display_mode *modes;
+
+	guard(mutex)(&dcp->modes_lock);
+	*count = 0;
+	if (!connector || !dcp->nr_modes || !dcp->modes_admitted ||
+	    READ_ONCE(dcp->connector) != connector)
+		return NULL;
+	modes = kmemdup_array(dcp->modes, dcp->nr_modes, sizeof(*dcp->modes),
+			      GFP_KERNEL);
+	if (modes)
+		*count = dcp->nr_modes;
+	return modes;
+}
+
+/*
+ * A display came to @dcp from another pipeline without being unplugged:
+ * offer the modes it had there until the firmware here describes it.
+ * Takes @modes.
+ */
+void dcp_modes_adopt(struct apple_dcp *dcp, struct dcp_display_mode *modes,
+		     unsigned int count)
+{
+	if (!modes)
+		return;
+	guard(mutex)(&dcp->modes_lock);
+	kfree(dcp->modes);
+	dcp->modes = modes;
+	dcp->nr_modes = count;
+	dcp->modes_admitted = true;
+}
+
 u64 dcp_modes_transfer_begin(struct apple_dcp *dcp)
 {
 	guard(mutex)(&dcp->modes_lock);
@@ -721,6 +757,12 @@ int dcp_crtc_atomic_modeset(struct drm_crtc *crtc,
 	return ret;
 }
 
+/* Does the display @dcp drives offer @mode? */
+bool dcp_has_mode(struct apple_dcp *dcp, const struct drm_display_mode *mode)
+{
+	return lookup_mode(dcp, mode, NULL);
+}
+
 bool dcp_crtc_mode_fixup(struct drm_crtc *crtc,
 			 const struct drm_display_mode *mode,
 			 struct drm_display_mode *adjusted_mode)
@@ -729,8 +771,14 @@ bool dcp_crtc_mode_fixup(struct drm_crtc *crtc,
 	struct platform_device *pdev = apple_crtc->dcp;
 	struct apple_dcp *dcp = platform_get_drvdata(pdev);
 
-	/* TODO: support synthesized modes through scaling */
-	return lookup_mode(dcp, mode, NULL);
+	/*
+	 * TODO: support synthesized modes through scaling
+	 *
+	 * A pipeline whose Type-C routes follow their CRTC may be given a
+	 * display that another pipeline still drives: dcp_crtc_atomic_check()
+	 * checks the mode against that one.
+	 */
+	return lookup_mode(dcp, mode, NULL) || dcp_typec_follows_crtc(dcp);
 }
 
 

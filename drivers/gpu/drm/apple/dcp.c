@@ -399,6 +399,22 @@ int dcp_crtc_atomic_check(struct drm_crtc *crtc, struct drm_atomic_state *state)
 
 	crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 
+	/*
+	 * A Type-C display routed to another pipeline: its route follows
+	 * this CRTC if it can (see dcp_typec_follow_check()), and the mode is
+	 * one of the display's, which only the pipeline driving it knows.
+	 */
+	if (crtc_state->enable && drm_atomic_crtc_needs_modeset(crtc_state) &&
+	    dcp_typec_follows_crtc(dcp)) {
+		struct apple_dcp *mode_dcp = dcp;
+		int ret = dcp_typec_follow_check(dcp, crtc, state, &mode_dcp);
+
+		if (ret)
+			return ret;
+		if (!dcp_has_mode(mode_dcp, &crtc_state->mode))
+			return -EINVAL;
+	}
+
 	needs_modeset = drm_atomic_crtc_needs_modeset(crtc_state) ||
 			!READ_ONCE(dcp->mode_state.valid);
 	if (!needs_modeset && (!dcp->connector || !dcp->connector->connected)) {
@@ -1058,6 +1074,31 @@ int dcp_dptx_disconnect_oob(struct platform_device *pdev, u32 port)
 	}
 
 	return dcp_dptx_disconnect_drained(dcp, port);
+}
+
+/*
+ * Release the display link of a Type-C output while its display stays
+ * attached, as a CRTC power-off does (see dcp_poweroff()): the firmware's
+ * unplug for it is ignored, and dcp_poweron() connects the link again.
+ */
+void dcp_dptx_park(struct apple_dcp *dcp)
+{
+	int ret;
+
+	scoped_guard(mutex, &dcp->hpd_mutex) {
+		if (dcp->typec_cable_connected)
+			WRITE_ONCE(dcp->typec_crtc_off, true);
+	}
+	cancel_delayed_work_sync(&dcp->typec_reconnect_wq);
+	cancel_delayed_work_sync(&dcp->placeholder_edid_wq);
+	if (dcp->avep)
+		av_service_disconnect(dcp);
+	if (dcp->dptxport[0].enabled && dcp->dptxport[0].connected) {
+		ret = dptxport_set_hpd(dcp->dptxport[0].service, false);
+		if (ret)
+			dev_warn(dcp->dev, "failed to deassert Type-C DPTX HPD: %d\n", ret);
+		dcp_dptx_disconnect(dcp, 0);
+	}
 }
 
 int dcp_dptx_disconnect_drained(struct apple_dcp *dcp, u32 port)

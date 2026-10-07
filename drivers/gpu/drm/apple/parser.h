@@ -112,6 +112,11 @@ struct dcp_display_mode *enumerate_modes(struct dcp_parse_ctx *handle,
 bool dcp_modes_for_connector(struct apple_dcp *dcp,
 			     struct apple_connector *connector);
 void dcp_modes_begin_attachment(struct apple_dcp *dcp);
+struct dcp_display_mode *dcp_modes_dup(struct apple_dcp *dcp,
+				       struct apple_connector *connector,
+				       unsigned int *count);
+void dcp_modes_adopt(struct apple_dcp *dcp, struct dcp_display_mode *modes,
+		     unsigned int count);
 bool dcp_modes_end_typec(struct apple_dcp *dcp, struct apple_dcp_typec_route *route);
 void dcp_modes_init(struct apple_dcp *dcp);
 void dcp_modes_release(void *data);

@@ -49,6 +49,7 @@ enum drm_mode_status dcp_mode_valid(struct drm_connector *connector,
 				    const struct drm_display_mode *mode);
 int dcp_crtc_atomic_modeset(struct drm_crtc *crtc,
 			    struct drm_atomic_state *state);
+bool dcp_has_mode(struct apple_dcp *dcp, const struct drm_display_mode *mode);
 bool dcp_crtc_mode_fixup(struct drm_crtc *crtc,
 			 const struct drm_display_mode *mode,
 			 struct drm_display_mode *adjusted_mode);
@@ -64,6 +65,7 @@ void dcp_external_retry_work(struct work_struct *work);
 void dcp_external_sink_irq(struct apple_dcp *dcp);
 void dcp_queue_typec_reconnect(struct apple_dcp *dcp, unsigned long delay);
 int dcp_dptx_disconnect_drained(struct apple_dcp *dcp, u32 port);
+void dcp_dptx_park(struct apple_dcp *dcp);
 int dcp_dptx_disconnect_oob(struct platform_device *pdev, u32 port);
 
 int iomfb_start_rtkit(struct apple_dcp *dcp);

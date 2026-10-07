@@ -124,6 +124,9 @@ static void apple_crtc_atomic_enable(struct drm_crtc *crtc,
 	struct drm_crtc_state *crtc_state;
 	crtc_state = drm_atomic_get_new_crtc_state(state, crtc);
 
+	/* A Type-C display paired with this CRTC comes to its pipeline. */
+	dcp_typec_follow_crtc(crtc, state);
+
 	if (crtc_state->active_changed && crtc_state->active) {
 		struct apple_crtc *apple_crtc = to_apple_crtc(crtc);
 		dcp_poweron(apple_crtc->dcp);
@@ -306,8 +309,9 @@ apple_connector_atomic_best_encoder(struct drm_connector *conn,
 
 	/*
 	 * A Type-C port has one encoder, whose possible_crtcs either already
-	 * names the pipeline the fabric routed the port to or, on dual-stream
-	 * machines, the fixed set the fabric only routes within, so it is the
+	 * names the pipeline the fabric routed the port to or spans the set
+	 * the fabric routes within: on dual-stream machines, and where the
+	 * route follows the CRTC (see dcp_typec_follow_crtc()).  So it is the
 	 * only answer there is.
 	 */
 	if (apple_connector->port_encoder)
