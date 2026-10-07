@@ -660,6 +660,17 @@ static void fabric_follow_test(struct kunit *test)
 			DCP_FABRIC_FOLLOW_REFUSE);
 	f.pipeline[0].services_ready = true;
 
+	/* Where routes follow their CRTC, streams arrive on the lowest CRTC. */
+	f.pipeline[1].owned = false;
+	KUNIT_EXPECT_PTR_EQ(test, dcp_fabric_free_route(&f.port[0], &f.policy),
+			    &f.route[0][1]);
+	f.policy.follow = true;
+	KUNIT_EXPECT_PTR_EQ(test, dcp_fabric_free_route(&f.port[0], &f.policy),
+			    &f.route[0][0]);
+	f.pipeline[0].fixed_busy = true;
+	KUNIT_EXPECT_PTR_EQ(test, dcp_fabric_free_route(&f.port[0], &f.policy),
+			    &f.route[0][1]);
+
 	/* #39 on the M2 Max: DPMS on pairs two direct ports the other way round. */
 	fabric_init(&f, true);
 	f.pipeline[0].owned = true;
